@@ -1,0 +1,192 @@
+# LibreWolf firefox-view.patch
+#
+# Author:        Malte Jürgens <maltejur@dismail.de>
+# Description:   Hide "Firefox View" by default and make it work with LibreWolf
+# Last Updated:  2023-01-18
+# License:       MPL 2.0
+#
+# This patch removes the Firefox View from the toolbar by default. Users can
+# enable it again by using the "Customize Toolbar" mode and dragging it back to
+# the titlebar.
+#
+# Colorways are hidden by default and can be enabled again by setting
+# `librewolf.firefoxView.hideColorways` to `false`.
+#
+# The tab pickup feature is hidden if Firefox Sync is disabled. It can also
+# be forced to always be disabled by setting `librewolf.firefoxView.hideTabPickup`
+# to `true`.
+diff --git a/browser/base/content/navigator-toolbox.inc.xhtml b/browser/base/content/navigator-toolbox.inc.xhtml
+index 46f1524..4473024 100644
+--- a/browser/base/content/navigator-toolbox.inc.xhtml
++++ b/browser/base/content/navigator-toolbox.inc.xhtml
+@@ -41,16 +41,6 @@
+       <hbox flex="1" align="end" class="toolbar-items">
+         <toolbartabstop/>
+         <hbox id="TabsToolbar-customization-target" flex="1">
+-          <toolbarbutton id="firefox-view-button"
+-                         class="toolbarbutton-1 chromeclass-toolbar-additional"
+-                         data-l10n-id="toolbar-button-firefox-view"
+-                         role="button"
+-                         aria-pressed="false"
+-                         oncommand="FirefoxViewHandler.openTab(event);"
+-                         onmousedown="FirefoxViewHandler.openTab(event);"
+-                         cui-areatype="toolbar"
+-                         removable="true"/>
+-
+           <tabs id="tabbrowser-tabs"
+                 is="tabbrowser-tabs"
+                 flex="1"
+@@ -704,6 +694,16 @@
+                    closemenu="none"
+                    cui-areatype="toolbar"
+                    data-l10n-id="navbar-library"/>
++
++    <toolbarbutton id="firefox-view-button"
++                   class="toolbarbutton-1 chromeclass-toolbar-additional"
++                   data-l10n-id="toolbar-button-firefox-view"
++                   role="button"
++                   aria-pressed="false"
++                   oncommand="FirefoxViewHandler.openTab(event);"
++                   onmousedown="FirefoxViewHandler.openTab(event);"
++                   cui-areatype="toolbar"
++                   removable="true"/>
+   </html:template>
+ </toolbox>
+ </box>
+diff --git a/browser/components/customizableui/CustomizableUI.jsm b/browser/components/customizableui/CustomizableUI.jsm
+index d43758e..ed9849f 100644
+--- a/browser/components/customizableui/CustomizableUI.jsm
++++ b/browser/components/customizableui/CustomizableUI.jsm
+@@ -298,7 +298,6 @@ var CustomizableUIInternal = {
+       {
+         type: CustomizableUI.TYPE_TOOLBAR,
+         defaultPlacements: [
+-          "firefox-view-button",
+           "tabbrowser-tabs",
+           "new-tab-button",
+           "alltabs-button",
+@@ -627,18 +626,6 @@ var CustomizableUIInternal = {
+         navbarPlacements.splice(newPosition, 0, "save-to-pocket-button");
+       }
+     }
+-
+-    // Add firefox-view if not present
+-    if (currentVersion < 18) {
+-      let tabstripPlacements =
+-        gSavedState.placements[CustomizableUI.AREA_TABSTRIP];
+-      if (
+-        tabstripPlacements &&
+-        !tabstripPlacements.includes("firefox-view-button")
+-      ) {
+-        tabstripPlacements.unshift("firefox-view-button");
+-      }
+-    }
+   },
+ 
+   _updateForNewProtonVersion() {
+diff --git a/browser/components/firefoxview/firefoxview.html b/browser/components/firefoxview/firefoxview.html
+index 099c244..978a140 100644
+--- a/browser/components/firefoxview/firefoxview.html
++++ b/browser/components/firefoxview/firefoxview.html
+@@ -35,7 +35,7 @@
+       </div>
+     </div>
+     <main>
+-      <details class="content-container" is="tab-pickup-container" id="tab-pickup-container" open>
++      <details class="content-container" is="tab-pickup-container" id="tab-pickup-container" open hidden>
+         <summary class="page-section-header">
+           <span class="twisty icon" data-l10n-id="firefoxview-collapse-button-hide" aria-role="presentation"></span>
+           <h1 id="collapsible-synced-tabs-header" data-l10n-id="firefoxview-tabpickup-header"></h1>
+diff --git a/browser/components/firefoxview/firefoxview.mjs b/browser/components/firefoxview/firefoxview.mjs
+index 7c05f87..fb1fda3 100644
+--- a/browser/components/firefoxview/firefoxview.mjs
++++ b/browser/components/firefoxview/firefoxview.mjs
+@@ -28,7 +28,26 @@ const MediaQueryDOMSorting = {
+   },
+ };
+ 
++function onPrefChange() {
++  document.getElementById("tab-pickup-container").hidden =
++    Services.prefs.getBoolPref("identity.fxaccounts.enabled") &&
++    !Services.prefs.getBoolPref("librewolf.firefoxView.hideTabPickup", false)
++      ? false
++      : true;
++  document.getElementById("colorways").hidden =
++    !Services.prefs.getBoolPref("librewolf.firefoxView.hideColorways", true)
++      ? false
++      : true;
++}
++
++[
++  "librewolf.firefoxView.hideTabPickup",
++  "librewolf.firefoxView.hideColorways",
++  "identity.fxaccounts.enabled",
++].forEach((pref) => Services.prefs.addObserver(pref, onPrefChange));
++
+ window.addEventListener("DOMContentLoaded", async () => {
++  onPrefChange();
+   Services.telemetry.setEventRecordingEnabled("firefoxview", true);
+   Services.telemetry.recordEvent("firefoxview", "entered", "firefoxview", null);
+   document.getElementById("recently-closed-tabs-container").onLoad();
+diff --git a/browser/components/newtab/lib/OnboardingMessageProvider.jsm b/browser/components/newtab/lib/OnboardingMessageProvider.jsm
+index 78098ec..aff9c0b 100644
+--- a/browser/components/newtab/lib/OnboardingMessageProvider.jsm
++++ b/browser/components/newtab/lib/OnboardingMessageProvider.jsm
+@@ -81,57 +81,6 @@ const BASE_MESSAGES = () => [
+     },
+     trigger: { id: "protectionsPanelOpen" },
+   },
+-  {
+-    id: "CFR_FIREFOX_VIEW",
+-    groups: ["cfr"],
+-    template: "cfr_doorhanger",
+-    //If Firefox View button has been moved to the overflow menu, we want to change the anchor element
+-    content: {
+-      bucket_id: "CFR_FIREFOX_VIEW",
+-      anchor_id: "firefox-view-button",
+-      alt_anchor_id: "nav-bar-overflow-button",
+-      layout: "icon_and_message",
+-      icon: "chrome://browser/content/cfr-lightning.svg",
+-      icon_dark_theme: "chrome://browser/content/cfr-lightning-dark.svg",
+-      icon_class: "cfr-doorhanger-small-icon",
+-      heading_text: {
+-        string_id: "firefoxview-cfr-header-v2",
+-      },
+-      text: {
+-        string_id: "firefoxview-cfr-body-v2",
+-      },
+-      buttons: {
+-        primary: {
+-          label: {
+-            string_id: "firefoxview-cfr-primarybutton",
+-          },
+-          action: {
+-            type: "OPEN_FIREFOX_VIEW",
+-            navigate: true,
+-          },
+-        },
+-        secondary: [
+-          {
+-            label: {
+-              string_id: "firefoxview-cfr-secondarybutton",
+-            },
+-            action: {
+-              type: "CANCEL",
+-            },
+-          },
+-        ],
+-      },
+-      skip_address_bar_notifier: true,
+-    },
+-    frequency: {
+-      lifetime: 1,
+-    },
+-    trigger: {
+-      id: "nthTabClosed",
+-    },
+-    // Avoid breaking existing tests that close tabs for now.
+-    targeting: `!inMr2022Holdback && fxViewButtonAreaType != null && (currentDate|date - profileAgeCreated) / 86400000 >= 2 && tabsClosedCount >= 3 && 'browser.firefox-view.view-count'|preferenceValue == 0 && !'browser.newtabpage.activity-stream.asrouter.providers.cfr'|preferenceIsUserSet`,
+-  },
+   {
+     id: "FX_MR_106_UPGRADE",
+     template: "spotlight",
